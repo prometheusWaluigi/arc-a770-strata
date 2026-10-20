@@ -1,0 +1,17 @@
+boot 1: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3970.3 ms  ->  4.03 tok/s
+boot 2: good  [output  : 1022 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30 31]  decode                   16 tokens in 4602.7 ms  ->  3.48 tok/s
+boot 3: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2948.3 ms  ->  5.43 tok/s
+boot 4: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3125.2 ms  ->  5.12 tok/s
+boot 5: good  [output  : 1022 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30 31]  decode                   16 tokens in 4253.8 ms  ->  3.76 tok/s
+boot 6: good  [output  : 1022 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30 31]  decode                   16 tokens in 4343.9 ms  ->  3.68 tok/s
+boot 7: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2965.8 ms  ->  5.39 tok/s
+boot 8: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3588.5 ms  ->  4.46 tok/s
+boot 9: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3588.7 ms  ->  4.46 tok/s
+boot 10: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3000.5 ms  ->  5.33 tok/s
+boot 11: good  [output  : 1022 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30 31]  decode                   16 tokens in 3588.2 ms  ->  4.46 tok/s
+boot 12: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2937.2 ms  ->  5.45 tok/s
+boot 13: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2992.8 ms  ->  5.35 tok/s
+boot 14: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2961.8 ms  ->  5.40 tok/s
+boot 15: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2967.7 ms  ->  5.39 tok/s
+boot 16: good  [output  : 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30 31 73307]  decode                   16 tokens in 3604.8 ms  ->  4.44 tok/s
+LOTTERY huf: N=16 good=16 soup=0 other=0

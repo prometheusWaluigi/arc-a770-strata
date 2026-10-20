@@ -1,0 +1,239 @@
+diff --git a/include/strata/kernels/elementwise.hpp b/include/strata/kernels/elementwise.hpp
+index be7567b6..48acde91 100644
+--- a/include/strata/kernels/elementwise.hpp
++++ b/include/strata/kernels/elementwise.hpp
+@@ -102,6 +102,12 @@ void doorbell_wait(const uint32_t* d_flag, const uint32_t* d_seq, void* stream);
+ /// device memory with a kernel, so the handoff stays on the compute queue (a memcpy node is a copy-engine
+ /// operation, which WDDM submits separately and which measured 67 flushes per token).
+ void copy_from_mapped(float* dst, const float* src, int64_t n, void* stream);
++/// local arm STRATA_MPLE_TAP: read `n` floats of MAPPED host memory into device `dst` exactly as the GPU sees
++/// them (uncached=1 uses the L1+L3-bypass load, 0 a plain load), so a tap can compare the device's view of a
++/// mapped page with the host's.
++void mapped_peek(float* dst, const float* src, int64_t n, int uncached, void* stream);
++/// the first `per` floats of each of `pages` mapped pages (page = 1024 floats) -> dst[pages * per].
++void mapped_probe(float* dst, const float* src, int64_t pages, int64_t per, int uncached, void* stream);
+ /// `rows` rows of `width` floats from mapped memory, except the rows listed in hit_rows[0, *count) (device),
+ /// which are written +0.0 instead (a verify window's GPU-computed entries: the pool leaves zeros there).
+ /// multi-GPU: dst[rows[r] * width ..] = src[r * width ..] for r < n (float4; dst may be mapped host memory).
+diff --git a/sycl/src/kernels/cuda/elementwise.dp.cpp b/sycl/src/kernels/cuda/elementwise.dp.cpp
+index 1faf32ef..73060cd3 100644
+--- a/sycl/src/kernels/cuda/elementwise.dp.cpp
++++ b/sycl/src/kernels/cuda/elementwise.dp.cpp
+@@ -568,6 +568,61 @@ void copy_from_mapped(float* dst, const float* src, int64_t n, void* stream) {
+     check_launch("copy_from_mapped");
+ }
+ 
++namespace {
++// STRATA_MPLE_TAP: the GPU's own read of a mapped host buffer, so a tap can compare the device's view with the
++// host's. uncached=1 issues the same L1+L3-bypass load copy_from_mapped uses; 0 is a plain load.
++__dpct_inline__ void mapped_peek_kernel(float *__restrict__ dst, const float *__restrict__ src, int64_t n,
++                                        int uncached) {
++    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
++    const int64_t i = (int64_t) item_ct1.get_group(2) * item_ct1.get_local_range(2) +
++                      item_ct1.get_local_id(2);
++    if (i < n) dst[i] = uncached ? strata::sys_load_mapped(src + i) : src[i];
++}
++__dpct_inline__ void mapped_probe_kernel(float *__restrict__ dst, const float *__restrict__ src, int64_t pages,
++                                         int64_t per, int uncached) {
++    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
++    const int64_t i = (int64_t) item_ct1.get_group(2) * item_ct1.get_local_range(2) +
++                      item_ct1.get_local_id(2);
++    if (i < pages * per) {
++        const float* s = src + (i / per) * 1024 + (i % per);
++        dst[i] = uncached ? strata::sys_load_mapped(s) : *s;
++    }
++}
++}  // namespace
++
++void mapped_peek(float* dst, const float* src, int64_t n, int uncached, void* stream) {
++    if (n <= 0) return;
++    const int blocks = (int) ((n + 255) / 256);
++    {
++        auto exp_props = sycl::ext::oneapi::experimental::properties{
++            sycl::ext::oneapi::experimental::use_root_sync};
++        strata::q_of(stream)
++            ->parallel_for<dpct_kernel_name<class mapped_peek_kernel_3f7a2b>>(
++                sycl::nd_range<3>(sycl::range(1, 1, blocks) * sycl::range(1, 1, 256),
++                                  sycl::range(1, 1, 256)),
++                exp_props,
++                [=](sycl::nd_item<3> item_ct1) { mapped_peek_kernel(dst, src, n, uncached); });
++    }
++    check_launch("mapped_peek");
++}
++
++void mapped_probe(float* dst, const float* src, int64_t pages, int64_t per, int uncached, void* stream) {
++    const int64_t n = pages * per;
++    if (n <= 0) return;
++    const int blocks = (int) ((n + 255) / 256);
++    {
++        auto exp_props = sycl::ext::oneapi::experimental::properties{
++            sycl::ext::oneapi::experimental::use_root_sync};
++        strata::q_of(stream)
++            ->parallel_for<dpct_kernel_name<class mapped_probe_kernel_8c1e5d>>(
++                sycl::nd_range<3>(sycl::range(1, 1, blocks) * sycl::range(1, 1, 256),
++                                  sycl::range(1, 1, 256)),
++                exp_props,
++                [=](sycl::nd_item<3> item_ct1) { mapped_probe_kernel(dst, src, pages, per, uncached); });
++    }
++    check_launch("mapped_probe");
++}
++
+ namespace {
+ // The published payload's checksum: the wrapping sum of every 32-bit word mixed with its position (murmur3's
+ // finalizer).  A plain sum of the words missed a reordering ([3, 7] -> [7, 3] in the expert ids) and cancelling
+diff --git a/sycl/include/strata/sycl_queue.hpp b/sycl/include/strata/sycl_queue.hpp
+index 3b92cace..fda10640 100644
+--- a/sycl/include/strata/sycl_queue.hpp
++++ b/sycl/include/strata/sycl_queue.hpp
+@@ -52,6 +52,7 @@ inline void big_fill_zero(sycl::queue& q, void* p, size_t bytes, size_t chunk =
+ #define STRATA_HAVE_ZE 1
+ #endif
+ #endif
++#include <cstdio>
+ #include <cstdlib>
+ #include <mutex>
+ #include <unordered_set>
+@@ -72,8 +73,13 @@ inline void* host_malloc_polled(size_t bytes, sycl::queue& q) {
+             detail::uncached_set().insert(p);
+             return p;
+         }
++        std::fprintf(stderr,
++            "strata: host_malloc_polled: uncached host alloc failed for %zu bytes - falling back to plain USM "
++            "(a kernel may never see host stores to it on i915/Arc)\n", bytes);
+     }
+ #endif
++    std::fprintf(stderr,
++        "strata: host_malloc_polled: %zu bytes served by plain sycl::malloc_host (no uncached host memory)\n", bytes);
+     return sycl::malloc_host(bytes, q);
+ }
+ inline void host_free_polled(void* p, sycl::queue& q) {
+@@ -258,6 +264,11 @@ inline size_t device_offset_end(const void* p, size_t bytes) {
+ // sycl::malloc_device.  The memory comes back uninitialised, as from sycl::malloc_device.
+ inline void* malloc_device_guarded(size_t bytes, sycl::queue& q, const char* what = "device buffer") {
+     void* p = sycl::malloc_device(bytes, q);
++    if (p == nullptr && std::getenv("STRATA_DXG_SHARED_FALLBACK") != nullptr) {
++        p = sycl::malloc_shared(bytes, q);   // dxg caps single device allocs at 1 GiB; shared USM is exempt
++        if (p != nullptr)
++            std::fprintf(stderr, "strata: %s (%.2f GiB) is in shared USM (device alloc refused: dxg cap)\n", what, (double) bytes / 1073741824.0);
++    }
+     if (p == nullptr || bytes < ((size_t) 32 << 20) || !arena_alias_guard_enabled()) {
+         device_alloc_register(p, bytes);
+         return p;
+diff --git a/sycl/src/core/verify.cpp b/sycl/src/core/verify.cpp
+index b7cf147a..2ab1f9b9 100644
+--- a/sycl/src/core/verify.cpp
++++ b/sycl/src/core/verify.cpp
+@@ -561,6 +572,113 @@ bool Verifier::init(const WeightTable &wt, const ModelGeometry &g,
+         sink_.fetch = &Verifier::fetch_dma;
+         sink_.ctx = this;
+     }
++    if (env_on("STRATA_HOST_USM_CHECK")) {   // local arm: page-0 alias check on every mapped staging buffer
++        struct StagingProbe { const char* name; void** hslot; void** dslot; size_t bytes; };
++        const StagingProbe probes[] = {
++            {"tok", (void**) &h_tok_, (void**) &m_tok_, (size_t) T * 4},
++            {"step", (void**) &h_step_, (void**) &m_step_, (size_t) T * strata::kernels::kStepCount * 4},
++            {"pos", (void**) &h_pos_, (void**) &m_pos_, (size_t) T * (NH + NKV + IQ) * 4},
++            {"commit", (void**) &h_commit_, (void**) &m_commit_, (size_t) (2 + T) * 4 + 16},
++            {"ple", (void**) &h_ple_, (void**) &m_ple_, (size_t) T * N * 4},
++            {"out", (void**) &h_out_, (void**) &m_out_, (size_t) T * 4 + 16},
++            {"x", (void**) &h_x_, (void**) &m_x_, (size_t) T * N * 4},
++            {"ids", (void**) &h_ids_, (void**) &m_ids_, (size_t) T * K * 4},
++            {"w", (void**) &h_w_, (void**) &m_w_, (size_t) T * K * 4},
++            {"seq", (void**) &h_seq_, (void**) &m_seq_, 64},
++            {"flag", (void**) &h_flag_, (void**) &m_flag_, 64},
++            {"flagA", (void**) &h_flagA_, (void**) &m_flagA_, 64},
++            {"flagB", (void**) &h_flagB_, (void**) &m_flagB_, 64},
++            {"plan_err", (void**) &h_plan_err_, (void**) &m_plan_err_, 64},
++            {"ymiss", (void**) &h_ymiss_, (void**) &m_ymiss_, (size_t) T * K * N * 4},
++            {"plan", (void**) &h_plan_, (void**) &m_plan_, (size_t) plan_i32_ * 4 * 2 + 64},
++        };
++        constexpr size_t words = 16;
++        const size_t nprobe = sizeof(probes) / sizeof(probes[0]);
++        float* view = nullptr;
++        if (DPCT_CHECK_ERROR(view = (float*) sycl::malloc_device(words * nprobe,
++                                                                 dpct::get_in_order_queue())) != 0 ||
++            view == nullptr) {
++            err = "verify: host-USM check probe allocation failed";
++            return false;
++        }
++        // remediation: an aliased buffer is re-allocated while the old one is still held (the new VA
++        // cannot reuse the old one's page), the old one is freed, and the whole set re-checked.
++        // STRATA_HOST_USM_REMEDIATE bounds the attempts (default 8); 1 refuses on first sight.
++        const char* rem_env = std::getenv("STRATA_HOST_USM_REMEDIATE");
++        const int tries = rem_env ? std::max(1, std::atoi(rem_env)) : 8;
++        bool clean = false;
++        for (int attempt = 1; attempt <= tries && !clean; ++attempt) {
++            for (size_t i = 0; i < nprobe; ++i) {
++                auto* tag = (uint32_t*) *probes[i].hslot;
++                for (size_t j = 0; j < words && j * 4 < probes[i].bytes; ++j)
++                    tag[j] = 0x5a5a0000u | ((uint32_t) i << 8) | (uint32_t) j;
++            }
++            for (size_t i = 0; i < nprobe; ++i)
++                strata::kernels::mapped_peek(view + i * words, (const float*) *probes[i].dslot,
++                                             (int64_t) words, 1, nullptr);
++            std::vector<uint32_t> got(words * nprobe);
++            const bool readback = DPCT_CHECK_ERROR(
++                dpct::get_in_order_queue().memcpy(got.data(), view, got.size() * 4).wait()) == 0;
++            if (!readback) {
++                sycl::free(view, dpct::get_in_order_queue());
++                err = "verify: host-USM check probe readback failed";
++                return false;
++            }
++            size_t bad = nprobe;
++            for (size_t i = 0; i < nprobe; ++i) {
++                for (size_t j = 0; j < words && j * 4 < probes[i].bytes; ++j) {
++                    if (got[i * words + j] != (0x5a5a0000u | ((uint32_t) i << 8) | (uint32_t) j)) {
++                        bad = i;
++                        break;
++                    }
++                }
++                std::memset(*probes[i].hslot, 0, std::min<size_t>(64, probes[i].bytes));
++                if (bad != nprobe) break;
++            }
++            if (bad == nprobe) { clean = true; break; }
++            const uint32_t got0 = got[bad * words];
++            const size_t src = (got0 & 0xffff0000u) == 0x5a5a0000u ? (got0 >> 8) & 0xff : nprobe;
++            if (attempt == tries) {
++                std::fprintf(stderr,
++                             "strata verify: host-USM check: %s page 0 reads as %s (tag 0x%08x, want 0x%08x) - refusing boot\n",
++                             probes[bad].name, src < nprobe ? probes[src].name : "an unmapped page", got0,
++                             0x5a5a0000u | ((uint32_t) bad << 8));
++                break;
++            }
++            std::fprintf(stderr,
++                         "strata verify: host-USM check: %s page 0 reads as %s (tag 0x%08x, want 0x%08x) - reallocating (attempt %d/%d)\n",
++                         probes[bad].name, src < nprobe ? probes[src].name : "an unmapped page", got0,
++                         0x5a5a0000u | ((uint32_t) bad << 8), attempt, tries);
++            void* nh = nullptr;
++            void* nd = nullptr;
++            if (!mapped(probes[bad].bytes, &nh, &nd)) {
++                sycl::free(view, dpct::get_in_order_queue());
++                err = "verify: host-USM remediation allocation failed";
++                return false;
++            }
++            strata::host_free_polled(*probes[bad].hslot, dpct::get_in_order_queue());
++            *probes[bad].hslot = nh;
++            *probes[bad].dslot = nd;
++            if (probes[bad].hslot == (void**) &h_plan_) {   // plan moved: re-derive the sink view
++                const int64_t cap = (int64_t) (T * K);
++                const int64_t i32 = 4 + (cap + 1) + cap + cap;
++                const int64_t ptr_off = (i32 + 1) & ~1ll;
++                sink_.counts = h_plan_;
++                sink_.start = h_plan_ + 4;
++                sink_.dst = sink_.start + cap + 1;
++                sink_.tok = sink_.dst + cap;
++                sink_.ptr = (unsigned long long*) (h_plan_ + ptr_off);
++                sink_.ptr2 = sink_.ptr + cap;
++                sink_.start2 = h_plan_ + ptr_off + 4 * cap;
++            }
++        }
++        sycl::free(view, dpct::get_in_order_queue());
++        if (!clean) {
++            err = "verify: a mapped staging page resolved to the wrong host page (STRATA_HOST_USM_CHECK)";
++            return false;
++        }
++        std::fprintf(stderr, "strata verify: host-USM check clean (%zu mapped staging buffers)\n", nprobe);
++    }
+ 
+     // ---- the device arena: the same sequence counted, then carved
+     auto carve = [&](Bump& b) {

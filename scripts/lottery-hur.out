@@ -1,0 +1,9 @@
+boot 1: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3789.3 ms  ->  4.22 tok/s
+boot 2: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2968.5 ms  ->  5.39 tok/s
+boot 3: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2928.7 ms  ->  5.46 tok/s
+boot 4: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2956.6 ms  ->  5.41 tok/s
+boot 5: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2944.0 ms  ->  5.43 tok/s
+boot 6: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2960.1 ms  ->  5.41 tok/s
+boot 7: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 2974.5 ms  ->  5.38 tok/s
+boot 8: good  [output  : 198 14 15 16 17 18 19 20 21 22 23 24 25 33898 2110 30]  decode                   16 tokens in 3642.6 ms  ->  4.39 tok/s
+LOTTERY hur: N=8 good=8 soup=0 other=0

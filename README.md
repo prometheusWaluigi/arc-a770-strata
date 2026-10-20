@@ -104,9 +104,9 @@ staging buffer, not just Strata's.
 
 - The investigation record lives in the lab; an upstream report in community-benchmark
   format has been drafted in-lab. This repo is the public writeup.
-- **Scripts are incoming from the lab**: the `STRATA_HOST_USM_CHECK`/REMEDIATE implementation
-  and a sample clean-boot log will land under `docs/` (see `docs/SCRIPTS-INCOMING.md`).
-  Nothing in this repo is a script we haven't run.
+- **Scripts have landed**: the `STRATA_HOST_USM_CHECK` + REMEDIATE implementation, the
+  boot-lottery harness, and a sample clean-boot log live under [`scripts/`](scripts/)
+  (index: `docs/SCRIPTS-INCOMING.md`). Nothing in this repo is a script we haven't run.
 
 ## License & attribution
 
